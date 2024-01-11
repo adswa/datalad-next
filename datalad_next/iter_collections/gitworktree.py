@@ -5,7 +5,6 @@ The main functionality is provided by the :func:`iter_gitworktree()` function.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 from itertools import chain
 import logging
 from pathlib import (
@@ -13,43 +12,42 @@ from pathlib import (
     PurePath,
     PurePosixPath,
 )
-import re
 from typing import (
     Dict,
     Generator,
     Tuple,
 )
 
-from datalad_next.runners import (
-    DEVNULL,
-    LineSplitter,
-    ThreadedRunner,
-    StdOutCaptureGeneratorProtocol,
+from datalad_next.runners import iter_git_subproc
+from datalad_next.itertools import (
+    decode_bytes,
+    itemize,
 )
+from datalad_next.utils import external_versions
+# Kludge: Filter out paths starting with .git/ to work around
+# an `ls-files -o` bug that was fixed in Git 2.25.
+git_needs_filter_kludge = external_versions['cmd:git'] < '2.25'
 
 from .utils import (
     FileSystemItem,
     FileSystemItemType,
-    PathBasedItem,
+)
+from .gittree import (
+    GitTreeItem,
+    GitTreeItemType,
+    _mode_type_map,
 )
 
 lgr = logging.getLogger('datalad.ext.next.iter_collections.gitworktree')
 
 
-# TODO Could be `StrEnum`, came with PY3.11
-class GitTreeItemType(Enum):
-    """Enumeration of item types of Git trees
-    """
-    file = 'file'
-    executablefile = 'executablefile'
-    symlink = 'symlink'
-    directory = 'directory'
-    submodule = 'submodule'
-
-
-# TODO maybe establish GitTreeItem and derive from that
 @dataclass
-class GitWorktreeItem(PathBasedItem):
+class GitWorktreeItem(GitTreeItem):
+    name: PurePath
+
+
+@dataclass
+class GitWorktreeFileSystemItem(FileSystemItem):
     name: PurePath
     # gitsha is not the sha1 of the file content, but the output
     # of `git hash-object` which does something like
@@ -57,28 +55,6 @@ class GitWorktreeItem(PathBasedItem):
     gitsha: str | None = None
     gittype: GitTreeItemType | None = None
 
-
-@dataclass
-class GitWorktreeFileSystemItem(FileSystemItem):
-    # gitsha is not the sha1 of the file content, but the output
-    # of `git hash-object` which does something like
-    # `printf "blob $(wc -c < "$file_name")\0$(cat "$file_name")" | sha1sum`
-    gitsha: str | None = None
-    gittype: GitTreeItemType | None = None
-
-
-# stolen from GitRepo.get_content_info()
-_lsfiles_props_re = re.compile(
-    r'(?P<mode>[0-9]+) (?P<gitsha>.*) ([^\t]*)\t(?P<fname>.*)$'
-)
-
-_mode_type_map = {
-    '100644': GitTreeItemType.file,
-    '100755': GitTreeItemType.executablefile,
-    '040000': GitTreeItemType.directory,
-    '120000': GitTreeItemType.symlink,
-    '160000': GitTreeItemType.submodule,
-}
 
 lsfiles_untracked_args = {
     'all':
@@ -96,6 +72,7 @@ def iter_gitworktree(
     untracked: str | None = 'all',
     link_target: bool = False,
     fp: bool = False,
+    recursive: str = 'repository',
 ) -> Generator[GitWorktreeItem | GitWorktreeFileSystemItem, None, None]:
     """Uses ``git ls-files`` to report on a work tree of a Git repository
 
@@ -129,27 +106,53 @@ def iter_gitworktree(
       ``all`` reports on any untracked file; ``whole-dir`` yields a single
       report for a directory that is entirely untracked, and not individual
       untracked files in it; ``no-empty-dir`` skips any reports on
-      untracked empty directories. Any untracked content is yielded as
-      a ``PurePosixPath``.
+      untracked empty directories.
     link_target: bool, optional
-      If ``True``, each file-type item includes a file-like object
-      to access the file's content. This file handle will be closed
-      automatically when the next item is yielded.
+      If ``True``, information matching a
+      :class:`~datalad_next.iter_collections.utils.FileSystemItem`
+      will be included for each yielded item, and the targets of
+      any symlinks will be reported, too.
     fp: bool, optional
-      If ``True``, each file-type item includes a file-like object
+      If ``True``, information matching a
+      :class:`~datalad_next.iter_collections.utils.FileSystemItem`
+      will be included for each yielded item, but without a
+      link target detection, unless ``link_target`` is given.
+      Moreover, each file-type item includes a file-like object
       to access the file's content. This file handle will be closed
       automatically when the next item is yielded.
+    recursive: {'repository', 'no'}, optional
+      Behavior for recursion into subdirectories of ``path``. By default
+      (``repository``), all directories within the repository are reported.
+      This possibly includes untracked ones (see ``untracked``), but not
+      directories within submodules. If ``no``, only direct children
+      of ``path`` are reported on. For any worktree items in subdirectories
+      of ``path`` only a single record for the containing immediate
+      subdirectory ``path`` is yielded. For example, with
+      'path/subdir/file1' and 'path/subdir/file2' there will only be a
+      single item with ``name='subdir'`` and ``type='directory'``.
 
     Yields
     ------
-    :class:`GitWorktreeItem` or `GitWorktreeFileSystemItem`
+    :class:`GitWorktreeItem` or :class:`GitWorktreeFileSystemItem`
+      The ``name`` attribute of an item is a ``PurePath`` instance with
+      the corresponding (relative) path, in platform conventions.
     """
+    # we force-convert to Path to prevent delayed crashing when reading from
+    # the file system. The docs already ask for that, but it is easy to
+    # forget/ignore and leads to non-obvious errors. Running this once is
+    # a cheap safety net
+    # https://github.com/datalad/datalad-next/issues/551
+    path = Path(path)
+
     lsfiles_args = ['--stage', '--cached']
     if untracked:
         lsfiles_args.extend(lsfiles_untracked_args[untracked])
 
     # helper to handle multi-stage reports by ls-files
-    pending_item = None
+    pending_item = (None,)
+
+    reported_dirs = set()
+    _single_dir = recursive == 'no'
 
     # we add a "fake" `None` record at the end to avoid a special
     # case for submitting the last pending item after the loop.
@@ -163,17 +166,52 @@ def iter_gitworktree(
 
         # yield any pending item, if the current record is not an
         # addendum of it
-        if ipath is None or (
-                pending_item is not None and pending_item[0] != ipath):
+        if ipath is None or pending_item[0] not in (None, ipath):
+            if ipath is None and pending_item[0] is None:
+                return
+            # this is the last point where we can still withhold a report.
+            # it is also the point where we can do this with minimal
+            # impact on the rest of the logic.
+            # so act on recursion setup now
+            pending_item_path_parts = pending_item[0].parts
+            if _single_dir and len(pending_item_path_parts) > 1:
+                # this path is pointing inside a subdirectory of the
+                # base directory -> ignore
+                # we do reset pending_item here, although this would also
+                # happen below -- it decomplexifies the conditionals
+                dir_path = pending_item_path_parts[0]
+                if dir_path in reported_dirs:
+                    # we only yield each containing dir once, and only once
+                    pending_item = (ipath,)
+                    continue
+                item = _get_item(
+                    path,
+                    # the next two must be passed in order to get the
+                    # full logic when to yield a GitWorktreeFileSystemItem
+                    # (not just GitWorktreeItem)
+                    link_target=link_target,
+                    fp=fp,
+                    # we know all props already
+                    ipath=dir_path,
+                    type=GitTreeItemType.directory,
+                    gitsha=None,
+                )
+                yield item
+                reported_dirs.add(dir_path)
+                pending_item = (ipath,)
+                continue
+
             # report on a pending item, this is not a "higher-stage"
             # report by ls-files
             item = _get_item(path, link_target, fp, *pending_item)
-            if fp and item.type == FileSystemItemType.file:
-                with (Path(path) / item.name).open('rb') as fp:
-                    item.fp = fp
-                    yield item
-            else:
+            fp_src = _get_fp_src(fp, path, item)
+            if fp_src is None:
+                # nothing to open
                 yield item
+            else:
+                with fp_src.open('rb') as active_fp:
+                    item.fp = active_fp
+                    yield item
 
         if ipath is None:
             # this is the trailing `None` record. we are done here
@@ -226,14 +264,20 @@ def _get_item(
 def _lsfiles_line2props(
     line: str
 ) -> Tuple[PurePosixPath, Dict[str, str] | None]:
-    props = _lsfiles_props_re.match(line)
-    if not props:
-        # Kludge: Filter out paths starting with .git/ to work around
-        # an `ls-files -o` bug that was fixed in Git 2.25.
-        #
-        # TODO: Drop this condition when GIT_MIN_VERSION is at least
-        # 2.25.
-        if line.startswith(".git/"):  # pragma nocover
+    items = line.split('\t', maxsplit=1)
+    # check if we cannot possibly have a 'staged' report with mode and gitsha
+    if len(items) < 2:
+        if git_needs_filter_kludge and line.startswith(".git/"):  # pragma nocover
+            lgr.debug("Filtering out .git/ file: %s", line)
+            return
+        # not known to Git, but Git always reports POSIX
+        path = PurePosixPath(line)
+        # early exist, we have nothing but the path (untracked)
+        return path, None
+
+    props = items[0].split(' ')
+    if len(props) != 3:
+        if git_needs_filter_kludge and line.startswith(".git/"):  # pragma nocover
             lgr.debug("Filtering out .git/ file: %s", line)
             return
         # not known to Git, but Git always reports POSIX
@@ -242,31 +286,54 @@ def _lsfiles_line2props(
         return path, None
 
     # again Git reports always in POSIX
-    path = PurePosixPath(props.group('fname'))
+    path = PurePosixPath(items[1])
     return path, dict(
-        gitsha=props.group('gitsha'),
-        mode=props.group('mode'),
+        gitsha=props[1],
+        mode=props[0],
     )
 
 
 def _git_ls_files(path, *args):
-    # we use a plain runner to avoid the overhead of a GitRepo instance
-    runner = ThreadedRunner(
-        cmd=[
-            'git', 'ls-files',
-            # we rely on zero-byte splitting below
-            '-z',
-            # otherwise take whatever is coming in
-            *args,
-        ],
-        protocol_class=StdOutCaptureGeneratorProtocol,
-        stdin=DEVNULL,
-        # run in the directory we want info on
-        cwd=path,
-    )
-    line_splitter = LineSplitter('\0', keep_ends=False)
-    # for each command output chunk received by the runner
-    for content in runner.run():
-        # for each zerobyte-delimited "line" in the output
-        for line in line_splitter.process(content.decode('utf-8')):
-            yield line
+    with iter_git_subproc(
+            [
+                'ls-files',
+                # we rely on zero-byte splitting below
+                '-z',
+                # otherwise take whatever is coming in
+                *args,
+            ],
+            cwd=path,
+    ) as r:
+        yield from decode_bytes(
+            itemize(
+                r,
+                sep=b'\0',
+                keep_ends=False,
+            )
+        )
+
+
+def _get_fp_src(
+    fp: bool,
+    basepath: Path,
+    item: GitWorktreeItem | GitWorktreeFileSystemItem,
+) -> Path | None:
+    if not fp:
+        # no file pointer request, we are done
+        return None
+
+    # if we get here, this is about file pointers...
+    fp_src = None
+    if item.type in (FileSystemItemType.file,
+                     FileSystemItemType.symlink):
+        fp_src = item.name
+    if fp_src is None:
+        # nothing to open
+        return None
+
+    fp_src_fullpath = basepath / fp_src
+    if not fp_src_fullpath.exists():
+        # nothing there to open (would resolve through a symlink)
+        return None
+
+    return fp_src_fullpath

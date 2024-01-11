@@ -3,6 +3,8 @@ import pytest
 
 from datalad.api import download
 
+from datalad_next.tests.marker import skipif_no_network
+
 from ..tarfile import (
     TarfileItem,
     FileSystemItemType,
@@ -32,22 +34,24 @@ def sample_tar_xz(tmp_path_factory):
     """
     path = tmp_path_factory.mktemp("tarfile")
     tfpath = path / 'sample.tar.xz'
-    download({
-        'https://github.com/datalad/datalad-next/releases/download/0.1.0/test_archive.tar.xz':
-        tfpath
-    })
+    download(
+        {'https://github.com/datalad/datalad-next/releases/download/0.1.0/test_archive.tar.xz':
+         tfpath},
+        result_renderer='disabled',
+    )
 
     yield tfpath
 
     tfpath.unlink()
 
 
+@skipif_no_network
 def test_iter_tar(sample_tar_xz):
     target_hash = {'SHA1': 'a8fdc205a9f19cc1c7507a60c4f01b13d11d7fd0',
                    'md5': 'ba1f2511fc30423bdbb183fe33f3dd0f'}
     targets = [
         TarfileItem(
-            name=PurePosixPath('test-archive'),
+            name='test-archive',
             type=FileSystemItemType.directory,
             size=0,
             mtime=1683657433,
@@ -55,16 +59,16 @@ def test_iter_tar(sample_tar_xz):
             uid=1000,
             gid=1000),
         TarfileItem(
-            name=PurePosixPath('test-archive') / '123.txt',
+            name='test-archive/123.txt',
             type=FileSystemItemType.symlink,
             size=0,
             mtime=1683657414,
             mode=511,
             uid=1000,
             gid=1000,
-            link_target=PurePosixPath('subdir') / 'onetwothree_again.txt'),
+            link_target='subdir/onetwothree_again.txt'),
         TarfileItem(
-            name=PurePosixPath('test-archive') / '123_hard.txt',
+            name='test-archive/123_hard.txt',
             type=FileSystemItemType.file,
             size=4,
             mtime=1683657364,
@@ -73,7 +77,7 @@ def test_iter_tar(sample_tar_xz):
             gid=1000,
             link_target=None),
         TarfileItem(
-            name=PurePosixPath('test-archive') / 'subdir',
+            name='test-archive/subdir',
             type=FileSystemItemType.directory,
             size=0,
             mtime=1683657400,
@@ -81,7 +85,7 @@ def test_iter_tar(sample_tar_xz):
             uid=1000,
             gid=1000),
         TarfileItem(
-            name=PurePosixPath('test-archive') / 'subdir' / 'onetwothree_again.txt',
+            name='test-archive/subdir/onetwothree_again.txt',
             type=FileSystemItemType.file,
             size=4,
             mtime=1683657400,
@@ -90,14 +94,14 @@ def test_iter_tar(sample_tar_xz):
             gid=1000,
             link_target=None),
         TarfileItem(
-            name=PurePosixPath('test-archive') / 'onetwothree.txt',
+            name='test-archive/onetwothree.txt',
             type=FileSystemItemType.hardlink,
             size=0,
             mtime=1683657364,
             mode=436,
             uid=1000,
             gid=1000,
-            link_target=PurePosixPath('test-archive') / '123_hard.txt'),
+            link_target='test-archive/123_hard.txt'),
     ]
     ires = []
     for i in iter_tar(sample_tar_xz, fp=True):

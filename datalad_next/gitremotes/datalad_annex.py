@@ -198,6 +198,10 @@ from urllib.parse import (
 
 from datalad.core.local.repo import repo_from_path
 
+from datalad_next.consts import (
+    PRE_INIT_COMMIT_SHA,
+    on_windows,
+)
 from datalad_next.constraints import EnsureInt
 from datalad_next.datasets import (
     LegacyAnnexRepo as AnnexRepo,
@@ -212,7 +216,6 @@ from datalad_next.runners import (
 from datalad_next.uis import ui_switcher as ui
 from datalad_next.utils import (
     external_versions,
-    on_windows,
     rmtree,
 )
 
@@ -224,7 +227,6 @@ from datalad_next.utils import (
     specialremote_credential_envmap,
     update_specialremote_credential,
 )
-from datalad_next.utils.consts import PRE_INIT_COMMIT_SHA
 
 lgr = logging.getLogger('datalad.gitremote.datalad_annex')
 
@@ -1146,7 +1148,7 @@ def make_export_tree(repo):
         ID of the tree object, suitable for `git-annex export`.
     """
     here = repo.config.get('annex.uuid')
-    # re-use existing, or go with fixed random one
+    # reuse existing, or go with fixed random one
     origin = repo.config.get('remote.origin.annex-uuid',
                              '8249ffce-770a-11ec-9578-5f6af5e76eaa')
     assert here, "No 'here'"

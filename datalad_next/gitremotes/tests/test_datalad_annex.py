@@ -27,7 +27,7 @@ from datalad_next.tests.utils import (
     eq_,
     rmtree,
 )
-from datalad_next.utils import on_windows
+from datalad_next.consts import on_windows
 from datalad_next.exceptions import CommandError
 from ..datalad_annex import get_initremote_params_from_url
 
@@ -52,7 +52,7 @@ def eq_dla_branch_state(state, path, branch=DEFAULT_BRANCH):
     assert None, f'Could not find state for branch {branch} at {path}'
 
 
-def test_annex_remote(existing_noannex_dataset, tmp_path):
+def test_annex_remote(existing_noannex_dataset, tmp_path, no_result_rendering):
     remotepath = tmp_path / 'remote'
     # bypass the complications of folding a windows path into a file URL
     dlaurl = \
@@ -63,7 +63,7 @@ def test_annex_remote(existing_noannex_dataset, tmp_path):
     _check_push_fetch_cycle(ds, dlaurl, remotepath, tmp_path)
 
 
-def test_export_remote(existing_noannex_dataset, tmp_path):
+def test_export_remote(existing_noannex_dataset, tmp_path, no_result_rendering):
     remotepath = tmp_path / 'remote'
     # bypass the complications of folding a windows path into a file URL
     dlaurl = \
@@ -243,7 +243,8 @@ def test_params_from_url():
          'url=http://example.com/path/to/something'])
 
 
-def test_typeweb_annex(existing_noannex_dataset, http_server, tmp_path):
+def test_typeweb_annex(existing_noannex_dataset, http_server, tmp_path,
+                       no_result_rendering):
     _check_typeweb(
         # bypass the complications of folding a windows path into a file URL
         'datalad-annex::?type=directory&directory={export}&encryption=none' \
@@ -257,7 +258,8 @@ def test_typeweb_annex(existing_noannex_dataset, http_server, tmp_path):
 
 
 # just to exercise the code path leading to an uncompressed ZIP
-def test_typeweb_annex_uncompressed(existing_noannex_dataset, http_server, tmp_path):
+def test_typeweb_annex_uncompressed(
+        existing_noannex_dataset, http_server, tmp_path, no_result_rendering):
     _check_typeweb(
         # bypass the complications of folding a windows path into a file URL
         'datalad-annex::?type=directory&directory={export}&encryption=none&dladotgit=uncompressed' \
@@ -270,7 +272,8 @@ def test_typeweb_annex_uncompressed(existing_noannex_dataset, http_server, tmp_p
     )
 
 
-def test_typeweb_export(existing_noannex_dataset, http_server, tmp_path):
+def test_typeweb_export(existing_noannex_dataset, http_server, tmp_path,
+                        no_result_rendering):
     _check_typeweb(
         # bypass the complications of folding a windows path into a file URL
         'datalad-annex::?type=directory&directory={export}&encryption=none&exporttree=yes' \
@@ -304,8 +307,8 @@ def _check_typeweb(pushtmpl, clonetmpl, ds, server, clonepath):
         dsclone.repo.get_hexsha(DEFAULT_BRANCH))
 
 
-def test_submodule_url(tmp_path, existing_noannex_dataset, http_server):
-    ckwa = dict(result_renderer='disabled')
+def test_submodule_url(tmp_path, existing_noannex_dataset, http_server,
+                       no_result_rendering):
     servepath = http_server.path
     url = http_server.url
     # a future subdataset that we want to register under a complex URL
@@ -320,7 +323,7 @@ def test_submodule_url(tmp_path, existing_noannex_dataset, http_server):
     ])
     tobesubds.repo.call_git(['push', '-u', 'dla', DEFAULT_BRANCH])
     # create a superdataset to register the subds to
-    super = Dataset(tmp_path / 'super').create(**ckwa)
+    super = Dataset(tmp_path / 'super').create()
     with patch.dict(
             "os.environ", {
                 "GIT_CONFIG_COUNT": "1",
@@ -332,11 +335,11 @@ def test_submodule_url(tmp_path, existing_noannex_dataset, http_server):
         super.clone(
             f'datalad-annex::{url}?type=web&url={{noquery}}&exporttree=yes',
             'subds',
-            **ckwa)
+        )
     # no clone the entire super
-    superclone = clone(super.path, tmp_path / 'superclone', **ckwa)
+    superclone = clone(super.path, tmp_path / 'superclone')
     # and auto-fetch the sub via the datalad-annex remote helper
-    superclone.get('subds', get_data=False, recursive=True, **ckwa)
+    superclone.get('subds', get_data=False, recursive=True)
     # we got the original subds
     subdsclone = Dataset(superclone.pathobj / 'subds')
     eq_(tobesubds.id, subdsclone.id)
@@ -346,11 +349,11 @@ def test_webdav_auth(existing_noannex_dataset,
                      tmp_path,
                      credman,
                      webdav_credential,
-                     webdav_server):
+                     webdav_server,
+                     no_result_rendering):
     credman.set(**webdav_credential)
     # this is the dataset we want to roundtrip through webdav
     ds = existing_noannex_dataset
-
     remoteurl = \
         f'datalad-annex::{webdav_server.url}' \
         '?type=webdav&url={noquery}&encryption=none&' \

@@ -1,5 +1,6 @@
 """Collection of fixtures for facilitation test implementations
 """
+import getpass
 import logging
 import os
 from pathlib import Path
@@ -15,12 +16,78 @@ from datalad_next.tests.utils import (
     HTTPPath,
     SkipTest,
     WebDAVPath,
+    assert_ssh_access,
     external_versions,
     get_git_config_global_fpath,
     md5sum,
 )
 
 lgr = logging.getLogger('datalad.next.tests.fixtures')
+
+
+@pytest.fixture(autouse=True, scope="session")
+def reduce_logging():
+    """Reduce the logging output during test runs
+
+    DataLad emits a large amount of repetitive INFO log messages that only
+    clutter the test output, and hardly ever help to identify an issue.
+    This fixture modifies the standard logger to throw away all INFO level
+    log messages.
+
+    With this approach, such messages are still fed to and processes by the
+    logger (in contrast to an apriori level setting).
+    """
+    dllgr = logging.getLogger('datalad')
+    # leave a trace that this is happening
+    dllgr.info("Test fixture starts suppressing INFO level messages")
+
+    class NoInfo(logging.Filter):
+        def filter(self, record):
+            # it seems unnecessary to special case progress logs, moreover
+            # not filtering them out will make clone/fetch/push very visible
+            # in the logs with trivial messages
+            #if hasattr(record, 'dlm_progress'):
+            #    # this is a progress log message that may trigger something
+            #    # a test is looking for
+            #    return True
+            if record.levelno == 20:
+                # this is a plain INFO message, ignore
+                return False
+            else:
+                return True
+
+    noinfo = NoInfo()
+    # we need to attach the filter to any handler to make it effective.
+    # adding to the logger only will not effect any log messages produced
+    # via descendant loggers
+    for hdlr in dllgr.handlers:
+        hdlr.addFilter(noinfo)
+
+
+@pytest.fixture(autouse=False, scope="function")
+def no_result_rendering(monkeypatch):
+    """Disable datalad command result rendering for all command calls
+
+    This is achieved by forcefully supplying `result_renderer='disabled'`
+    to any command call via a patch to internal argument normalizer
+    ``get_allargs_as_kwargs()``.
+    """
+    # we need to patch our patch function, because datalad-core's is no
+    # longer used
+    import datalad_next.patches.interface_utils as dnpiu
+
+    old_get_allargs_as_kwargs = dnpiu.get_allargs_as_kwargs
+
+    def no_render_get_allargs_as_kwargs(call, args, kwargs):
+        kwargs, one, two = old_get_allargs_as_kwargs(call, args, kwargs)
+        kwargs['result_renderer'] = 'disabled'
+        return kwargs, one, two
+
+    with monkeypatch.context() as m:
+        m.setattr(dnpiu,
+                  'get_allargs_as_kwargs',
+                  no_render_get_allargs_as_kwargs)
+        yield
 
 
 @pytest.fixture(autouse=False, scope="function")
@@ -221,6 +288,8 @@ def existing_noannex_dataset(dataset):
 
 @pytest.fixture(autouse=False, scope="session")
 def webdav_credential():
+    """Provides HTTP Basic authentication credential necessary to access the
+    server provided by the ``webdav_server`` fixture."""
     yield dict(
         name='dltest-my&=webdav',
         user='datalad',
@@ -256,6 +325,8 @@ def webdav_server(tmp_path_factory, webdav_credential):
 
 @pytest.fixture(autouse=False, scope="session")
 def http_credential():
+    """Provides the HTTP Basic authentication credential necessary to access the
+    HTTP server provided by the ``http_server_with_basicauth`` fixture."""
     yield dict(
         name='dltest-my&=http',
         user='datalad',
@@ -273,9 +344,6 @@ def http_server(tmp_path_factory):
 
     - ``path``: ``Path`` instance of the served temporary directory
     - ``url``: HTTP URL to access the HTTP server
-
-    Server access requires HTTP Basic authentication with the credential
-    provided by the ``webdav_credential`` fixture.
     """
     # must use the factory to get a unique path even when a concrete
     # test also uses `tmp_path`
@@ -289,7 +357,7 @@ def http_server(tmp_path_factory):
 
 @pytest.fixture(autouse=False, scope="function")
 def http_server_with_basicauth(tmp_path_factory, http_credential):
-    """Like ``http_server`` but requiring authenticat with ``http_credential``
+    """Like ``http_server`` but requiring authentication via ``http_credential``
     """
     path = tmp_path_factory.mktemp("webdav")
     server = HTTPPath(
@@ -367,6 +435,10 @@ def httpbin(httpbin_service):
     raises ``SkipTest`` whenever any of these undesired conditions is
     detected. Otherwise it just relays ``httpbin_service``.
     """
+    if os.environ.get('DATALAD_TESTS_NONETWORK'):
+        raise SkipTest(
+            'Not running httpbin-based test: NONETWORK flag set'
+        )
     if 'APPVEYOR' in os.environ and 'DEPLOY_HTTPBIN_IMAGE' not in os.environ:
         raise SkipTest(
             "Not running httpbin-based test on appveyor without "
@@ -422,3 +494,63 @@ def datalad_noninteractive_ui(monkeypatch):
     with monkeypatch.context() as m:
         m.setattr(ui_switcher, '_ui', TestUI())
         yield ui_switcher.ui
+
+
+@pytest.fixture(autouse=False, scope="session")
+def sshserver_setup(tmp_path_factory):
+    if not os.environ.get('DATALAD_TESTS_SSH'):
+        raise SkipTest(
+            "set DATALAD_TESTS_SSH=1 to enable")
+
+    # query a bunch of recognized configuration environment variables,
+    # fill in the blanks, then check if the given configuration is working,
+    # and post the full configuration again as ENV vars, to be picked up by
+    # the function-scope `datalad_cfg`
+    tmp_root = str(tmp_path_factory.mktemp("sshroot"))
+    host = os.environ.get('DATALAD_TESTS_SERVER_SSH_HOST', 'localhost')
+    port = os.environ.get('DATALAD_TESTS_SERVER_SSH_PORT', '22')
+    login = os.environ.get(
+        'DATALAD_TESTS_SERVER_SSH_LOGIN',
+        getpass.getuser())
+    seckey = os.environ.get(
+        'DATALAD_TESTS_SERVER_SSH_SECKEY',
+        str(Path.home() / '.ssh' / 'id_rsa'))
+    path = os.environ.get('DATALAD_TESTS_SERVER_SSH_PATH', tmp_root)
+    # TODO this should not use `tmp_root` unconditionally, but only if
+    # the SSH_PATH is known to be the same. This might not be if SSH_PATH
+    # is explicitly configured and LOCALPATH is not -- which could be
+    # an indication that there is none
+    localpath = os.environ.get('DATALAD_TESTS_SERVER_LOCALPATH', tmp_root)
+
+    assert_ssh_access(host, port, login, seckey, path, localpath)
+
+    info = {}
+    # as far as we can tell, this is good, post effective config in ENV
+    for v, e in (
+            (host, 'HOST'),
+            # this is SSH_*, because elsewhere we also have other properties
+            # for other services
+            (port, 'SSH_PORT'),
+            (login, 'SSH_LOGIN'),
+            (seckey, 'SSH_SECKEY'),
+            (path, 'SSH_PATH'),
+            (localpath, 'LOCALPATH'),
+    ):
+        os.environ[f"DATALAD_TESTS_SERVER_{e}"] = v
+        info[e] = v
+
+    yield info
+
+
+@pytest.fixture(autouse=False, scope="function")
+def sshserver(sshserver_setup, datalad_cfg, monkeypatch):
+    baseurl = f"ssh://{sshserver_setup['SSH_LOGIN']}" \
+        f"@{sshserver_setup['HOST']}" \
+        f":{sshserver_setup['SSH_PORT']}" \
+        f"/{sshserver_setup['SSH_PATH']}"
+    with monkeypatch.context() as m:
+        m.setenv("DATALAD_SSH_IDENTITYFILE", sshserver_setup['SSH_SECKEY'])
+        # force reload the config manager, to ensure the private key setting
+        # makes it into the active config
+        datalad_cfg.reload(force=True)
+        yield baseurl, Path(sshserver_setup['LOCALPATH'])

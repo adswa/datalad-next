@@ -5,8 +5,8 @@ from tempfile import NamedTemporaryFile
 from unittest.mock import patch
 from pathlib import Path
 
+from datalad_next.consts import on_windows
 from datalad_next.exceptions import CapturedException
-from datalad_next.utils import on_windows
 
 from ..base import DatasetParameter
 
@@ -248,7 +248,7 @@ def test_WithDescription(dataset):
         error_message_for_ds='dserror',
     )
     # function is maintained
-    assert c('5') is 5
+    assert c('5') == 5
     assert str(c) == '<EnsureInt with custom description>'
     assert repr(c) == \
         "WithDescription(EnsureInt(), " \

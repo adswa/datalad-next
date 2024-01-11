@@ -16,6 +16,7 @@ __docformat__ = 'restructuredtext'
 __all__ = ['CredentialManager']
 
 from collections.abc import Callable
+from collections.abc import Set
 from datetime import datetime
 import logging
 import re
@@ -302,7 +303,7 @@ class CredentialManager(object):
             prompt = 'Enter a name to save the credential'
             if _context:
                 prompt = f'{prompt} ({_context})'
-            prompt = f"{prompt} securely for future re-use, " \
+            prompt = f"{prompt} securely for future reuse, " \
                      "or 'skip' to not save the credential"
             if _suggested_name:
                 prompt = f'{prompt}, or leave empty to accept the name ' \
@@ -1048,7 +1049,7 @@ class CredentialManager(object):
             if k.startswith(var_prefix)
         }
 
-    def _get_known_credential_names(self) -> set:
+    def _get_known_credential_names(self) -> Set[str]:
         known_credentials = set(
             '.'.join(k.split('.')[2:-1]) for k in self._cfg.keys()
             if k.startswith('datalad.credential.')
@@ -1126,7 +1127,7 @@ class CredentialManager(object):
             type_hint = dict(_yield_legacy_credential_types()).get(name)
 
         if not type_hint or type_hint not in self._cred_types:
-            return
+            return None
 
         cred = {}
         lc = self._cred_types[type_hint]
@@ -1180,7 +1181,7 @@ class CredentialManager(object):
                 return secret
 
         # no secret found anywhere
-        return
+        return None
 
     @property
     def _cfg(self):

@@ -1,7 +1,53 @@
 """Execution of subprocesses
 
-This module import all relevant components for subprocess execution.
+This module provides all relevant components for subprocess execution.
+
+.. currentmodule:: datalad_next.runners
+
+Low-level tooling
+-----------------
+
+Few process execution/management utilities are provided, for
+generic command execution, and for execution command in the context
+of a Git repository.
+
+.. autosummary::
+   :toctree: generated
+
+   GitRunner
+   Runner
+   iter_subproc
+   iter_git_subproc
+
+Additional information on the design of the subprocess execution tooling
+is available from https://docs.datalad.org/design/threaded_runner.html
+
+A standard exception type is used to communicate any process termination
+with a non-zero exit code
+
+.. autosummary::
+   :toctree: generated
+
+   CommandError
+
+Command output can be processed via "protocol" implementations that are
+inspired by ``asyncio.SubprocessProtocol``.
+
+.. autosummary::
+   :toctree: generated
+
+   KillOutput
+   NoCapture
+   StdOutCapture
+   StdErrCapture
+   StdOutErrCapture
 """
+
+from .iter_subproc import (
+    iter_subproc,
+    iter_git_subproc,
+    IterableSubprocessError,
+)
 
 # runners
 from datalad.runner import (

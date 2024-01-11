@@ -3,8 +3,8 @@ import zipfile
 from pathlib import PurePosixPath
 
 from ..zipfile import (
-    ZipfileItem,
     FileSystemItemType,
+    ZipfileItem,
     iter_zip,
 )
 
@@ -23,7 +23,7 @@ def sample_zip(tmp_path_factory):
 
     Layout::
 
-        test-archive
+        test-archive/
         ├── onetwothree.txt
         └── subdir/
             └── onetwothree<>again.txt
@@ -47,25 +47,25 @@ def test_iter_zip(sample_zip):
         'SHA1': 'b5dfcec4d1b6166067226fae102f7fbcf6bd1bd4',
         'md5': 'd700214df5487801e8ee23d31e60382a',
     }
-    root = PurePosixPath('test-archive')
+    root = 'test-archive'
     targets = [
         ZipfileItem(
-            name=root,
+            name=f'{root}/',
             type=FileSystemItemType.directory,
             size=0,
         ),
         ZipfileItem(
-            name=root / 'onetwothree.txt',
+            name=f'{root}/onetwothree.txt',
             type=FileSystemItemType.file,
             size=8,
         ),
         ZipfileItem(
-            name=root / 'subdir',
+            name=f'{root}/subdir/',
             type=FileSystemItemType.directory,
             size=0,
         ),
         ZipfileItem(
-            name=root / 'subdir' / 'onetwothree<>again.txt',
+            name=f'{root}/subdir/onetwothree<>again.txt',
             type=FileSystemItemType.file,
             size=8,
         ),

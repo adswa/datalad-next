@@ -1,4 +1,191 @@
 
+# 1.0.2 (2023-10-23) -- Debianize!
+
+## 🏠 Internal
+
+- The `www-authenticate` dependencies is dropped. The functionality is
+  replaced by a `requests`-based implementation of an alternative parser.
+  This trims the dependency footprint and facilitates Debian-packaging.
+  The previous test cases are kept and further extended.
+  Fixes https://github.com/datalad/datalad-next/issues/493 via
+  https://github.com/datalad/datalad-next/pull/495 (by @mih)
+
+## 🛡 Tests
+
+- The test battery now honors the `DATALAD_TESTS_NONETWORK` environment
+  variable and downgrades by skipping any tests that require external
+  network access. (by @mih)
+
+# 1.0.1 (2023-10-18)
+
+## 🐛 Bug Fixes
+
+- Fix f-string syntax in error message of the `uncurl` remote.
+  https://github.com/datalad/datalad-next/pull/455 (by @christian-monch)
+
+- `FileSystemItem.from_path()` now honors its `link_target` parameter, and
+  resolves a target for any symlink item conditional on this setting.
+  Previously, a symlink target was always resolved.
+  Fixes https://github.com/datalad/datalad-next/issues/462 via
+  https://github.com/datalad/datalad-next/pull/464 (by @mih)
+
+- Update the vendor installation of versioneer to v0.29. This
+  resolves an installation failure with Python 3.12 due to
+  the removal of an ancient class.
+  Fixes https://github.com/datalad/datalad-next/issues/475 via
+  https://github.com/datalad/datalad-next/pull/483 (by @mih)
+
+- Bump dependency on Python to 3.8. This is presently the oldest version
+  still supported upstream. However, some functionality already used
+  3.8 features, so this is also a bug fix.
+  Fixes https://github.com/datalad/datalad-next/issues/481 via
+  https://github.com/datalad/datalad-next/pull/486 (by @mih)
+
+## 💫 Enhancements and new features
+
+- Patch datalad-core's `run` command to honor configuration defaults
+  for substitutions. This enables placeholders like `{python}` that
+  point to `sys.executable` by default, and need not be explicitly
+  defined in system/user/dataset configuration.
+  Fixes https://github.com/datalad/datalad-next/issues/478 via
+  https://github.com/datalad/datalad-next/pull/485 (by @mih)
+
+## 📝 Documentation
+
+- Include `gitworktree` among the available file collection types
+  listed in `ls-file-collection`'s docstring.  Fixes
+  https://github.com/datalad/datalad-next/issues/470 via
+  https://github.com/datalad/datalad-next/pull/471 (by @mslw)
+
+- The renderer API documentation now includes an entrypoint for the
+  runner-related functionality and documentation at
+  https://docs.datalad.org/projects/next/en/latest/generated/datalad_next.runners.html
+  Fixes https://github.com/datalad/datalad-next/issues/466 via
+  https://github.com/datalad/datalad-next/pull/467 (by @mih)
+
+## 🛡 Tests
+
+- Simplified setup for subprocess test-coverage reporting. Standard
+  pytest-cov features are not employed, rather than the previous
+  approach that was adopted from datalad-core, which originated
+  in a time when testing was performed via nose.
+  Fixes https://github.com/datalad/datalad-next/issues/453 via
+  https://github.com/datalad/datalad-next/pull/457 (by @mih)
+
+
+# 1.0.0 (2023-09-25)
+
+This release represents a milestone in the development of the extension.
+The package is reorganized to be a collection of more self-contained
+mini-packages, each with its own set of tests.
+
+Developer documentation and guidelines have been added to aid further
+development. One particular goal is to establish datalad-next as a proxy
+for importing datalad-core functionality for other extensions. Direct imports
+from datalad-core can be minimized in favor of imports from datalad-next.
+This helps identifying functionality needed outside the core package,
+and guides efforts for future improvements.
+
+The 1.0 release marks the switch to a more standard approach to semantic
+versioning. However, although a substantial improvements have been made,
+the 1.0 version nohow indicates a slowdown of development or a change in the
+likelihood of (breaking) changes. They will merely become more easily
+discoverable from the version label alone.
+
+Notable high-level features introduced by this major release are:
+
+- The new `UrlOperations` framework to provide a set of basic operations like
+  `download`, `upload`, `stat` for different protocols. This framework can be
+  thought of as a replacement for the "downloaders" functionality in
+  datalad-core -- although the feature list is not 100% overlapping. This new
+  framework is more easily extensible by 3rd-party code.
+
+- The `Constraints` framework elevates parameter/input validation to the next
+  level. In contrast to datalad-core, declarative input validation is no longer
+  limited to the CLI. Instead, command parameters can now be validated regardless
+  of the entrypoint through which a command is used. They can be validated
+  individually, but also sets of parameters can be validated jointly to implement
+  particular interaction checks. All parameter validations can now be performed
+  exhaustive, to present a user with a complete list of validation errors, rather
+  then the fail-on-first-error method implemented exclusively in datalad-core.
+  Validation errors are now reported using dedicated structured data type to aid
+  their communication via non-console interfaces.
+
+- The `Credentials` system has been further refined with more homogenized
+  workflows and deeper integration into other subsystems. This release merely
+  represents a snapshot of continued development towards a standardization of
+  credential handling workflows.
+
+- The annex remotes `uncurl` and `archivist` are replacements for the
+  datalad-core implementations `datalad` and `datalad-archive`. The offer
+  substantially improved configurability and leaner operation -- built on the
+  `UrlOperations` framework.
+
+- A growing collection of iterator (see `iter_collections`) aims to provide
+  fast (and more Pythonic) operations on common data structures (Git worktrees,
+  directories, archives). The can be used as an alternative to the traditional
+  `Repo` classes (`GitRepo`, `AnnexRepo`) from datalad-core.
+
+- Analog to `UrlOperations` the `ArchiveOperations` framework aims to provide
+  an abstraction for operations on different archive types (e.g., TAR). The
+  represent an alternative to the traditional implementations of
+  `ExtractedArchive` and `ArchivesCache` from datalad-core, and aim at leaner
+  resource footprints.
+
+- The collection of runtime patches for datalad-core has been further expanded.
+  All patches are now individually documented, and applied using a set of standard
+  helpers (see http://docs.datalad.org/projects/next/en/latest/patches.html).
+
+For details, please see the changelogs of the 1.0.0 beta releases below.
+
+## 💫 Enhancements and new features
+
+- `TarArchiveOperations` is the first implementation of the `ArchiveOperations`
+  abstraction, providing archive handlers with a set of standard operations:
+  - `open` to get a file object for a particular archive member
+  - `__contains__` to check for the presence of a particular archive member
+  - `__iter__` to get an iterator for processing all archive members
+  https://github.com/datalad/datalad-next/pull/415 (by @mih)
+
+## 🐛 Bug Fixes
+
+- Make `TarfileItem.name` be of type `PurePosixPath` to reflect the fact
+  that a TAR archive can contain members with names that cannot be represent
+  unmodified on a non-POSIX file system.
+  https://github.com/datalad/datalad-next/pull/422 (by @mih)
+  An analog change is done for `ZipfileItem.name`.
+  https://github.com/datalad/datalad-next/pull/409 (by @christian-monch)
+
+- Fix `git ls-file` parsing in `iter_gitworktree()` to be compatible with
+  file names that start with a `tab` character.
+  https://github.com/datalad/datalad-next/pull/421 (by @christian-monch)
+
+## 📝 Documentation
+
+- Expanded guidelines on test implementations.
+
+- Add missing and fix wrong docstrings for HTTP/WebDAV server related fixtures.
+  https://github.com/datalad/datalad-next/pull/445 (by @adswa)
+
+## 🏠 Internal
+
+- Deduplicate configuration handling code in annex remotes.
+  https://github.com/datalad/datalad-next/pull/440 (by @adswa)
+
+## 🛡 Tests
+
+- New test fixtures have been introduced to replace traditional test helpers
+  from datalad-core:
+
+  - `datalad_interactive_ui` and `datalad_noninteractive_ui` for testing
+    user interactions. They replace `with_testsui`.
+    https://github.com/datalad/datalad-next/pull/427 (by @mih)
+
+- Expand test coverage for `create_sibling_webdav` to include recursive
+  operation.
+  https://github.com/datalad/datalad-next/pull/434 (by @adswa)
+
+
 # 1.0.0b3 (2023-06-09)
 
 ## 🐛 Bug Fixes
@@ -134,7 +321,7 @@
   https://github.com/datalad/datalad-next/pull/391 (by @mih)
 
 - The `main()` entrypoint of the `datalad-annex` Git remote helper has
-  be generalized to be more re-usable by other (derived) remote helper
+  be generalized to be more reusable by other (derived) remote helper
   implementations.
   https://github.com/datalad/datalad-next/pull/411 (by @mih)
 
@@ -246,7 +433,7 @@
   - The CredentialManager was elevated to a top-level module
     ([#229](https://github.com/datalad/datalad-next/pull/220) by @mih)
   - Dataset-lookup behavior of the ``credentials`` command became identical to
-    ``downlad`` ([#256](https://github.com/datalad/datalad-next/pull/256) by
+    ``download`` ([#256](https://github.com/datalad/datalad-next/pull/256) by
     @mih)
 
 - The DataLad runner performance patch and all patches to clone functionality

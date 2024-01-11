@@ -119,12 +119,6 @@ class ArchivistRemote(SpecialRemote):
     """
     def __init__(self, annex):
         super().__init__(annex)
-        # the following members will be initialized on prepare()
-        # as they require access to the underlying repository
-        self._repo = None
-        # name of the (git) remote archivist is operating under
-        # (for querying the correct configuration)
-        self._remotename = None
         # central archive handler cache, initialized on-prepare
         self._ahandlers = None
         # a potential instance of the legacy datalad-archives implementation
@@ -162,13 +156,17 @@ class ArchivistRemote(SpecialRemote):
         subsequent operations will be processed by the ``datalad-archives``
         special remote implementation!
         """
+        # we have to do this here, because the base class `.repo` will only give
+        # us a `LeanAnnexRepo`.
+        # TODO it is unclear to MIH what is actually needed API-wise of the legacy
+        # interface. Needs research.
         self._repo = LegacyAnnexRepo(self.annex.getgitdir())
-        self._remotename = self.annex.getgitremotename()
         # are we in legacy mode?
         # let remote-specific setting take priority (there could be
         # multiple archivist-type remotes configured), and use unspecific switch
         # as a default, with a general default of NO
-        if self._getcfg('legacy-mode', default='no').lower() == 'yes':
+        if self.get_remote_gitcfg(
+                'archivist', 'legacy-mode', default='no').lower() == 'yes':
             # ATTENTION DEBUGGERS!
             # If we get here, we will bypass all of the archivist
             # implementation! Check __getattribute__() -- pretty much no
@@ -184,7 +182,7 @@ class ArchivistRemote(SpecialRemote):
 
         # central archive key handler coordination
         self._ahandlers = _ArchiveHandlers(
-            self._repo,
+            self.repo,
             # TODO
             #cache_mode=self._getcfg(
             #    'archive-cache-mode',
@@ -271,7 +269,7 @@ class ArchivistRemote(SpecialRemote):
         # So let's do a two-pass approach, first check local availability
         # for any archive key, and only if that does not find us an archive
         # go for the remotes
-        if any(_get_key_contentpath(self._repo, akey) for akey in akeys):
+        if any(_get_key_contentpath(self.repo, akey) for akey in akeys):
             # any one is good enough
             # TODO here we could actually look into the archive and
             # verify member presence without relatively little cost
@@ -282,7 +280,7 @@ class ArchivistRemote(SpecialRemote):
             try:
                 # if it exits clean, the key is still present at at least one
                 # remote
-                self._repo.call_annex(['checkpresentkey', akey])
+                self.repo.call_annex(['checkpresentkey', akey])
                 return True
             except CommandError:
                 self.message(
@@ -344,30 +342,6 @@ class ArchivistRemote(SpecialRemote):
     #
     # Helpers
     #
-    # TODO this could be promoted to SpecialRemote as a generic helper
-    # would need standardization of remote name query in `prepare()`
-    def _getcfg(self, name: str, default=None):
-        """Get a particular special remote configuration item value
-
-        Parameters
-        ----------
-        name: str
-          The name of the "naked" configuration item, without any
-          sub/sections. Must be a valid git-config variable name, i.e.,
-          case-insensitive, only alphanumeric characters and -, and
-          must start with an alphabetic character.
-        default:
-          A default value to be returned if there is no configuration.
-        """
-        cfgget = self._repo.config.get
-        rname = self._remotename
-        return cfgget(
-            f'remote.{rname}.archivist-{name}',
-            default=cfgget(
-                f'datalad.archivist.{name}',
-                default=default,
-            )
-        )
 
     def _get_key_dlarchive_urls(self, key):
         return self.annex.geturls(key, prefix='dl+archive:')

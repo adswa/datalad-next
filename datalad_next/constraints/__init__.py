@@ -59,6 +59,7 @@ from .basic import (
     EnsureCallable,
     EnsureChoice,
     EnsureFloat,
+    EnsureHashAlgorithm,
     EnsureInt,
     EnsureKeyChoice,
     EnsureNone,
@@ -83,4 +84,9 @@ from .formats import (
     EnsureJSON,
     EnsureURL,
     EnsureParsedURL,
+)
+
+from .git import (
+    EnsureGitRefName,
+    EnsureRemoteName
 )

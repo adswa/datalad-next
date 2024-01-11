@@ -7,6 +7,9 @@ import pytest
 from datalad.api import ls_file_collection
 
 from datalad_next.constraints.exceptions import CommandParametrizationError
+# we need this fixture
+from datalad_next.iter_collections.tests.test_iterzip import sample_zip
+from datalad_next.tests.marker import skipif_no_network
 
 from ..ls_file_collection import LsFileCollectionParamValidator
 
@@ -30,49 +33,59 @@ def test_ls_file_collection_insufficient_args():
         ls_file_collection('bogus', 'http://example.com')
 
 
-def test_ls_file_collection_tarfile(sample_tar_xz):
-    kwa = dict(result_renderer='disabled')
-    # smoke test first
-    res = ls_file_collection(
-        'tarfile',
-        sample_tar_xz,
-        hash='md5',
-        **kwa
-    )
-    assert len(res) == 6
-    # test a few basic properties that should be true for any result
-    for r in res:
-        # basics of a result
-        assert r['action'] == 'ls_file_collection'
-        assert r['status'] == 'ok'
-        # a collection identifier, here the tar location
-        assert 'collection' in r
-        assert r['collection'] == sample_tar_xz
-        # an item identifier, here a path of an archive member
-        assert 'item' in r
-        assert isinstance(r['item'], PurePath)
-        # item type info, here some filesystem-related category
-        assert 'type' in r
-        assert r['type'] in ('file', 'directory', 'symlink', 'hardlink')
+def _check_archive_member_result(r, collection):
+    # basics of a result
+    assert r['action'] == 'ls_file_collection'
+    assert r['status'] == 'ok'
+    # a collection identifier, here the tar location
+    assert 'collection' in r
+    assert r['collection'] == collection
+    # an item identifier, here a str-path of an archive member
+    assert 'item' in r
+    assert isinstance(r['item'], str)
+    # item type info, here some filesystem-related category
+    assert 'type' in r
+    assert r['type'] in ('file', 'directory', 'symlink', 'hardlink')
 
 
-def test_ls_file_collection_directory(tmp_path):
-    kwa = dict(result_renderer='disabled')
+def test_ls_file_collection_zipfile(sample_zip, no_result_rendering):
+    for res in (
+        ls_file_collection('zipfile', sample_zip),
+        ls_file_collection('zipfile', sample_zip, hash='md5'),
+    ):
+        assert len(res) == 4
+        # test a few basic properties that should be true for any result
+        for r in res:
+            _check_archive_member_result(r, sample_zip)
+
+
+@skipif_no_network
+def test_ls_file_collection_tarfile(sample_tar_xz, no_result_rendering):
+    for res in (
+        ls_file_collection('tarfile', sample_tar_xz),
+        ls_file_collection('tarfile', sample_tar_xz, hash='md5'),
+    ):
+        assert len(res) == 6
+        # test a few basic properties that should be true for any result
+        for r in res:
+            _check_archive_member_result(r, sample_tar_xz)
+
+
+def test_ls_file_collection_directory(tmp_path, no_result_rendering):
     # smoke test on an empty dir
-    res = ls_file_collection('directory', tmp_path, **kwa)
+    res = ls_file_collection('directory', tmp_path)
     assert len(res) == 0
 
 
-def test_ls_file_collection_gitworktree(existing_dataset):
-    kwa = dict(result_renderer='disabled')
+def test_ls_file_collection_gitworktree(existing_dataset, no_result_rendering):
     # smoke test on a plain dataset
-    res = ls_file_collection('gitworktree', existing_dataset.pathobj, **kwa)
+    res = ls_file_collection('gitworktree', existing_dataset.pathobj)
     assert len(res) > 1
     assert all('gitsha' in r for r in res)
 
     # and with hashing
     res_hash = ls_file_collection('gitworktree', existing_dataset.pathobj,
-                                  hash='md5', **kwa)
+                                  hash='md5')
     assert len(res) == len(res_hash)
     assert all('hash-md5' in r for r in res_hash)
 
@@ -84,16 +97,16 @@ def test_ls_file_collection_validator():
         val.get_collection_iter(type='bogus', collection='any', hash=None)
 
 
-def test_replace_add_archive_content(sample_tar_xz, existing_dataset):
-    kwa = dict(result_renderer='disabled')
-
+@skipif_no_network
+def test_replace_add_archive_content(sample_tar_xz, existing_dataset,
+                                     no_result_rendering):
     ds = existing_dataset
     archive_path = ds.pathobj / '.datalad' / 'myarchive.tar.xz'
     # get archive copy in dataset (not strictly needed, but
     # add-archive-content worked like this
-    ds.download({sample_tar_xz.as_uri(): archive_path}, **kwa)
+    ds.download({sample_tar_xz.as_uri(): archive_path})
     # properly safe to dataset (download is ignorant of datasets)
-    res = ds.save(message='add archive', **kwa)
+    res = ds.save(message='add archive')
     # the first result has the archive addition, snatch the archive key from it
     assert res[0]['path'] == str(archive_path)
     archive_key = res[0]['key']
@@ -109,7 +122,7 @@ def test_replace_add_archive_content(sample_tar_xz, existing_dataset):
     # including `ls-file-collection` executed on a different host).
     file_recs = [
         r for r in ls_file_collection(
-            'tarfile', sample_tar_xz, hash=['md5'], **kwa
+            'tarfile', sample_tar_xz, hash=['md5'],
         )
         # ignore any non-file, would not have an annex key.
         # Also ignores hardlinks (they consume no space (size=0), but could be
@@ -138,7 +151,6 @@ def test_replace_add_archive_content(sample_tar_xz, existing_dataset):
         # filenameformat
         '{item}',
         key='et:MD5-s{size}--{hash-md5}',
-        **kwa
     )
     # because we have  been adding the above URLs using a pure metadata-driven
     # approach, git-annex does not yet know that the archives remote actually
@@ -156,8 +168,8 @@ def test_replace_add_archive_content(sample_tar_xz, existing_dataset):
     # check retrieval for a test file, which is not yet around
     testfile = ds.pathobj / 'test-archive' / '123_hard.txt'
     assert ds.status(
-        testfile, annex='availability', **kwa)[0]['has_content'] is False
-    ds.get(testfile, **kwa)
+        testfile, annex='availability')[0]['has_content'] is False
+    ds.get(testfile)
     assert testfile.read_text() == '123\n'
 
 
@@ -168,3 +180,35 @@ def test_ls_renderer():
         Path(__file__).parent,
         result_renderer='tailored',
     )
+
+
+def test_ls_annexworktree_empty_dataset(existing_dataset):
+    res = ls_file_collection(
+        'annexworktree',
+        existing_dataset.pathobj,
+        result_renderer='disabled'
+    )
+    assert len(res) == 3
+    annexed_files = [annex_info for annex_info in res if 'annexkey' in annex_info]
+    assert len(annexed_files) == 0
+
+
+def test_ls_annexworktree_simple_dataset(existing_dataset):
+
+    (existing_dataset.pathobj / 'sample.bin').write_bytes(b'\x00' * 1024)
+    existing_dataset.save(message='add sample file')
+
+    res = ls_file_collection(
+        'annexworktree',
+        existing_dataset.pathobj,
+        result_renderer='disabled'
+    )
+    assert len(res) == 4
+    annexed_files = [annex_info for annex_info in res if 'annexkey' in annex_info]
+    assert len(annexed_files) == 1
+    assert annexed_files[0]['type'] == 'annexed file'
+    assert {
+        'annexkey',
+        'annexsize',
+        'annexobjpath'
+    }.issubset(set(annexed_files[0].keys()))

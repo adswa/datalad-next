@@ -32,6 +32,15 @@ from datalad_next.tests.fixtures import (
     httpbin,
     # session-scope HTTPBIN instance startup and URLs
     httpbin_service,
+    # function-scope, disabled datalad command result rendering for all
+    # command calls
+    no_result_rendering,
+    # session-scope redirection of log messages
+    reduce_logging,
+    # session-scope determine setup of an SSH server to use for testing
+    sshserver_setup,
+    # function-scope SSH server base url and local path
+    sshserver,
     # session-scope, standard webdav credential (full dict)
     webdav_credential,
     # function-scope, serve a local temp-path via WebDAV
@@ -41,4 +50,8 @@ from datalad_next.iter_collections.tests.test_itertar import (
     # session-scope, downloads a tarball with a set of standard
     # file/dir/link types
     sample_tar_xz,
+)
+from datalad_next.iter_collections.tests.test_iterzip import (
+    # session-scope, create a sample zip file
+    sample_zip,
 )

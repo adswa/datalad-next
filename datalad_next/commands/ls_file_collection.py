@@ -39,6 +39,8 @@ from datalad_next.constraints import (
     EnsureChoice,
     EnsurePath,
     EnsureURL,
+    EnsureHashAlgorithm,
+    EnsureListOf,
 )
 from datalad_next.uis import (
     ansi_colors as ac,
@@ -48,14 +50,21 @@ from datalad_next.utils import ensure_list
 
 from datalad_next.iter_collections.directory import iter_dir
 from datalad_next.iter_collections.tarfile import iter_tar
+from datalad_next.iter_collections.zipfile import iter_zip
 from datalad_next.iter_collections.utils import (
     FileSystemItemType,
     compute_multihash_from_fp,
 )
-from datalad_next.iter_collections.gitworktree import (
+from datalad_next.iter_collections.gittree import (
     GitTreeItemType,
+    iter_gittree,
+)
+from datalad_next.iter_collections.gitworktree import (
     GitWorktreeFileSystemItem,
     iter_gitworktree,
+)
+from datalad_next.iter_collections.annexworktree import (
+    iter_annexworktree,
 )
 
 
@@ -69,7 +78,10 @@ lgr = getLogger('datalad.local.ls_file_collection')
 _supported_collection_types = (
     'directory',
     'tarfile',
+    'zipfile',
+    'gittree',
     'gitworktree',
+    'annexworktree',
 )
 
 
@@ -93,9 +105,7 @@ class LsFileCollectionParamValidator(EnsureCommandParameterization):
             param_constraints=dict(
                 type=self._collection_types,
                 collection=EnsurePath(lexists=True) | EnsureURL(),
-                # TODO EnsureHashAlgorithm
-                # https://github.com/datalad/datalad-next/issues/346
-                #hash=None,
+                hash=EnsureHashAlgorithm() | EnsureListOf(EnsureHashAlgorithm()),
             ),
             joint_constraints={
                 ParameterConstraintContext(('type', 'collection', 'hash'),
@@ -110,7 +120,7 @@ class LsFileCollectionParamValidator(EnsureCommandParameterization):
         hash = kwargs['hash']
         iter_fx = None
         iter_kwargs = None
-        if type in ('directory', 'tarfile', 'gitworktree'):
+        if type in ('directory', 'tarfile', 'zipfile', 'gitworktree', 'annexworktree'):
             if not isinstance(collection, Path):
                 self.raise_for(
                     kwargs,
@@ -128,9 +138,28 @@ class LsFileCollectionParamValidator(EnsureCommandParameterization):
         elif type == 'tarfile':
             iter_fx = iter_tar
             item2res = fsitem_to_dict
+        elif type == 'zipfile':
+            iter_fx = iter_zip
+            item2res = fsitem_to_dict
+        elif type == 'gittree':
+            if hash is not None:
+                self.raise_for(
+                    kwargs,
+                    "gittree collection does not support "
+                    "content hash reporting",
+                )
+            iter_fx = iter_gittree
+            item2res = gittreeitem_to_dict
+            iter_kwargs = dict(
+                path=Path('.'),
+                treeish=collection,
+            )
         elif type == 'gitworktree':
             iter_fx = iter_gitworktree
             item2res = gitworktreeitem_to_dict
+        elif type == 'annexworktree':
+            iter_fx = iter_annexworktree
+            item2res = annexworktreeitem_to_dict
         else:
             raise RuntimeError(
                 'unhandled collection-type: this is a defect, please report.')
@@ -178,6 +207,30 @@ def fsitem_to_dict(item, hash) -> Dict:
     return d
 
 
+def gittreeitem_to_dict(item, hash) -> Dict:
+    gittreeitem_type_to_res_type = {
+        # permission bits are not distinguished for types
+        GitTreeItemType.executablefile: 'file',
+        # 'dataset' is the commonly used label as the command API
+        # level
+        GitTreeItemType.submodule: 'dataset',
+    }
+
+    gittype = gittreeitem_type_to_res_type.get(
+        item.gittype, item.gittype.value) if item.gittype else None
+
+    d = dict(item=item.name)
+    if gittype is not None:
+        d['type'] = gittype
+
+    if item.gitsha:
+        d['gitsha'] = item.gitsha
+
+    if gittype is not None:
+        d['gittype'] = gittype
+    return d
+
+
 def gitworktreeitem_to_dict(item, hash) -> Dict:
     gitworktreeitem_type_to_res_type = {
         # permission bits are not distinguished for types
@@ -205,6 +258,17 @@ def gitworktreeitem_to_dict(item, hash) -> Dict:
     return d
 
 
+def annexworktreeitem_to_dict(item, hash) -> Dict:
+    d = gitworktreeitem_to_dict(item, hash)
+    if item.annexkey:
+        d['type'] = 'annexed file'
+        d['annexkey'] = item.annexkey
+        d['annexsize'] = item.annexsize
+        d['annexobjpath'] = item.annexobjpath
+
+    return d
+
+
 @build_doc
 class LsFileCollection(ValidatedInterface):
     """Report information on files in a collection
@@ -226,10 +290,37 @@ class LsFileCollection(ValidatedInterface):
     ``directory``
       Reports on the content of a given directory (non-recursively). The
       collection identifier is the path of the directory. Item identifiers
-      are the name of a file within that directory. Standard properties like
+      are the names of items within that directory. Standard properties like
       ``size``, ``mtime``, or ``link_target`` are included in the report.
       [PY: When hashes are computed, an ``fp`` property with a file-like
       is provided. Reading file data from it requires a ``seek(0)`` in most
+      cases. This file handle is only open when items are yielded directly
+      by this command (``return_type='generator``) and only until the next
+      result is yielded. PY]
+
+    ``gittree``
+      Reports on the content of a Git "tree-ish". The collection identifier
+      is that tree-ish. The command must be executed inside a Git repository.
+      If the working directory for the command is not the repository root
+      (in case of a non-bare repository), the report is constrained to
+      items underneath the working directory. Item identifiers
+      are the relative paths of items within that working directory.
+      Reported properties include ``gitsha`` and ``gittype``; note that the
+      ``gitsha`` is not equivalent to a SHA1 hash of a file's content, but
+      is the SHA-type blob identifier as reported and used by Git.
+      Reporting of content hashes beyond the ``gitsha`` is presently not
+      supported.
+
+    ``gitworktree``
+      Reports on all tracked and untracked content of a Git repository's
+      work tree. The collection identifier is a path of a directory in a Git
+      repository (which can, but needs not be, its root). Item identifiers
+      are the relative paths of items within that directory. Reported
+      properties include ``gitsha`` and ``gittype``; note that the
+      ``gitsha`` is not equivalent to a SHA1 hash of a file's content, but
+      is the SHA-type blob identifier as reported and used by Git.
+      [PY: When hashes are computed, an ``fp`` property with a file-like is
+      provided. Reading file data from it requires a ``seek(0)`` in most
       cases. This file handle is only open when items are yielded directly
       by this command (``return_type='generator``) and only until the next
       result is yielded. PY]
@@ -332,7 +423,9 @@ class LsFileCollection(ValidatedInterface):
         type = res.get('type', None)
 
         # if there is no mode, produces '?---------'
-        mode = filemode(res.get('mode', 0))
+        # .. or 0 is needed, because some iterators report an explicit
+        # `None` mode
+        mode = filemode(res.get('mode', 0) or 0)
 
         size = None
         if type in ('file', 'hardlink'):
@@ -352,7 +445,7 @@ class LsFileCollection(ValidatedInterface):
         # stick with numerical IDs (although less accessible), we cannot
         # know in general whether this particular system can map numerical
         # IDs to valid target names (think stored name in tarballs)
-        owner_info = f'{res["uid"]}:{res["gid"]}' if 'uid' in res else ''
+        owner_info = f'{res["uid"]}:{res["gid"]}' if res.get('uid') else ''
 
         ui.message('{mode} {size: >6} {owner: >9} {hts: >11} {item} ({type})'.format(
             mode=mode,
